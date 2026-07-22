@@ -9,14 +9,14 @@ User=www-data
 Group=www-data
 
 # Project installation path — adjust if deployed elsewhere
-WorkingDirectory=/var/www/documents
-EnvironmentFile=/var/www/documents/.env
+WorkingDirectory=/var/www/html/documents
+EnvironmentFile=/var/www/html/documents/.env
 
 # Ensure the venv binaries are preferred
-Environment=PATH=/var/www/documents/venv/bin:/usr/local/bin:/usr/bin
+Environment=PATH=/var/www/html/documents/venv/bin:/usr/local/bin:/usr/bin
 Environment=PYTHONUNBUFFERED=1
 
-ExecStart=/var/www/documents/venv/bin/gunicorn \
+ExecStart=/var/www/html/documents/venv/bin/gunicorn \
     -k uvicorn.workers.UvicornWorker \
     -w 4 \
     -b 0.0.0.0:8000 \
@@ -39,7 +39,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/var/www/documents/app/storage /var/www/documents/logs
+ReadWritePaths=/var/www/html/documents/app/storage /var/www/html/documents/logs
 
 # Resource limits (tune for your host)
 LimitNOFILE=65535

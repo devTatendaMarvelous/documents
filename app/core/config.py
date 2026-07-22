@@ -62,7 +62,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    api_key: "microfindev263"
+    # Kept for compatibility with .env; auth uses app.core.constants.API_KEY
+    api_key: str = Field(default="microfindev263", alias="API_KEY")
     port: int = Field(default=8000, alias="PORT")
     max_upload_size: str = Field(default="50MB", alias="MAX_UPLOAD_SIZE")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")

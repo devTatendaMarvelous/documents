@@ -14,7 +14,7 @@
 #   sudo bash deploy.sh
 #
 # Optional environment overrides:
-#   APP_DIR=/var/www/documents
+#   APP_DIR=/var/www/html/documents   # defaults to this script's directory
 #   SERVER_NAME=files.example.com
 #   BIND=0.0.0.0:8000
 #   WORKERS=4
@@ -27,7 +27,8 @@ set -euo pipefail
 # Defaults
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_DIR="${APP_DIR:-/var/www/documents}"
+# Install in-place (where the repo lives) unless APP_DIR is overridden
+APP_DIR="${APP_DIR:-${SCRIPT_DIR}}"
 SERVER_NAME="${SERVER_NAME:-files.example.com}"
 # Listen on all interfaces so the service is reachable at http://<server-ip>:8000/
 BIND="${BIND:-0.0.0.0:8000}"
@@ -235,12 +236,19 @@ sed \
 
 systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}"
+
+# Fail fast with a clear traceback if the app cannot import
+log "Verifying application import as ${SERVICE_USER}"
+if ! sudo -u "${SERVICE_USER}" bash -lc "cd '${APP_DIR}' && ./venv/bin/python -c 'from app.main import app; print(app.title)'"; then
+  die "Application failed to import — fix the traceback above before starting systemd"
+fi
+
 systemctl restart "${SERVICE_NAME}"
 
 sleep 2
 if ! systemctl is-active --quiet "${SERVICE_NAME}"; then
   warn "Service failed to start — recent logs:"
-  journalctl -u "${SERVICE_NAME}" -n 40 --no-pager || true
+  journalctl -u "${SERVICE_NAME}" -n 80 --no-pager || true
   die "${SERVICE_NAME}.service is not active"
 fi
 log "systemd service is active"
