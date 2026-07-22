@@ -24,6 +24,7 @@ from starlette.types import Scope
 
 from app.api import files, health, upload
 from app.core.config import get_settings
+from app.core.constants import API_KEY
 from app.core.logger import get_logger, log_extra, setup_logging
 
 setup_logging()
@@ -51,10 +52,15 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         if path == "/health" or path in PUBLIC_PATHS:
             return await call_next(request)
 
-        settings = get_settings()
-        provided = request.headers.get("X-API-Key")
+        provided = (
+            request.headers.get("X-API-Key")
+            or request.headers.get("x-api-key")
+            or request.headers.get("X-Api-Key")
+        )
+        if provided:
+            provided = provided.strip()
 
-        if not provided or provided != settings.api_key:
+        if not provided or provided != API_KEY:
             log_extra(
                 logger,
                 logging.WARNING,

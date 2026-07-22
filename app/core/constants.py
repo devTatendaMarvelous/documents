@@ -79,3 +79,6 @@ ALLOWED_UPLOAD_EXTENSIONS: frozenset[str] = (
 )
 
 DEFAULT_MIME_TYPE: str = "application/octet-stream"
+
+# Shared secret required in the X-API-Key header (all endpoints except /health)
+API_KEY: str = "microfindev263"

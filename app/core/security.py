@@ -6,7 +6,7 @@ import logging
 
 from fastapi import Header, HTTPException, status
 
-from app.core.config import Settings, get_settings
+from app.core.constants import API_KEY
 from app.core.logger import get_logger, log_extra
 
 logger = get_logger("security")
@@ -16,15 +16,14 @@ async def verify_api_key(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> str:
     """
-    Validate the ``X-API-Key`` request header against the configured API key.
+    Validate the ``X-API-Key`` request header against the hardcoded API key.
 
     Raises:
         HTTPException: 401 when the header is missing or does not match.
     """
-    settings: Settings = get_settings()
-    expected = settings.api_key
+    provided = (x_api_key or "").strip() or None
 
-    if not x_api_key or x_api_key != expected:
+    if not provided or provided != API_KEY:
         log_extra(
             logger,
             logging.WARNING,
@@ -41,4 +40,4 @@ async def verify_api_key(
             },
         )
 
-    return x_api_key
+    return provided
