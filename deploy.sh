@@ -16,7 +16,7 @@
 # Optional environment overrides:
 #   APP_DIR=/var/www/documents
 #   SERVER_NAME=files.example.com
-#   BIND=127.0.0.1:8000
+#   BIND=0.0.0.0:8000
 #   WORKERS=4
 #   SKIP_APACHE=1
 #   SKIP_APT=1
@@ -29,10 +29,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="${APP_DIR:-/var/www/documents}"
 SERVER_NAME="${SERVER_NAME:-files.example.com}"
-BIND="${BIND:-127.0.0.1:8000}"
+# Listen on all interfaces so the service is reachable at http://<server-ip>:8000/
+BIND="${BIND:-0.0.0.0:8000}"
 WORKERS="${WORKERS:-4}"
 SERVICE_NAME="documents"
-SKIP_APACHE="${SKIP_APACHE:-0}"
+# Apache is optional when accessing the app directly on port 8000
+SKIP_APACHE="${SKIP_APACHE:-1}"
 SKIP_APT="${SKIP_APT:-0}"
 SERVICE_USER="www-data"
 SERVICE_GROUP="www-data"
@@ -221,8 +223,8 @@ fi
 # Rewrite paths from the template defaults to the actual APP_DIR / BIND / WORKERS
 sed \
   -e "s|/var/www/documents|${APP_DIR}|g" \
-  -e "s|-w 4|-w ${WORKERS}|g" \
-  -e "s|-b 127.0.0.1:8000|-b ${BIND}|g" \
+  -e "s|-w [0-9][0-9]*|-w ${WORKERS}|g" \
+  -e "s|-b [0-9.:]*|-b ${BIND}|g" \
   "${UNIT_SRC}" > "${UNIT_DST}"
 
 systemctl daemon-reload
@@ -237,6 +239,22 @@ if ! systemctl is-active --quiet "${SERVICE_NAME}"; then
 fi
 log "systemd service is active"
 
+# Open firewall for the listen port when binding on all interfaces
+BIND_PORT="${BIND##*:}"
+BIND_HOST="${BIND%%:*}"
+if [[ "${BIND_HOST}" == "0.0.0.0" || "${BIND_HOST}" == "*" ]]; then
+  if command -v ufw >/dev/null 2>&1; then
+    if ufw status 2>/dev/null | grep -qi "Status: active"; then
+      log "Allowing TCP ${BIND_PORT} through ufw"
+      ufw allow "${BIND_PORT}/tcp" comment "Document & Image Service" || true
+    else
+      warn "ufw is installed but inactive — ensure cloud/security-group firewall allows TCP ${BIND_PORT}"
+    fi
+  else
+    warn "Ensure the host firewall / cloud security group allows inbound TCP ${BIND_PORT}"
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # Apache reverse proxy (optional)
 # ---------------------------------------------------------------------------
@@ -244,7 +262,8 @@ if [[ "${SKIP_APACHE}" != "1" ]]; then
   if command -v apache2 >/dev/null 2>&1 || command -v apachectl >/dev/null 2>&1; then
     log "Configuring Apache VirtualHost (${SERVER_NAME})"
     SITE_AVAILABLE="/etc/apache2/sites-available/${SERVICE_NAME}.conf"
-    PROXY_TARGET="http://${BIND}/"
+    # Apache always proxies to loopback even when Gunicorn binds 0.0.0.0
+    PROXY_TARGET="http://127.0.0.1:${BIND_PORT}/"
 
     cat > "${SITE_AVAILABLE}" <<EOF
 <VirtualHost *:80>
@@ -286,8 +305,8 @@ fi
 # Health check
 # ---------------------------------------------------------------------------
 log "Running local health check"
-HEALTH_URL="http://${BIND}/health"
-# BIND may be 127.0.0.1:8000 — curl that directly
+# Always probe via loopback even when Gunicorn binds 0.0.0.0
+HEALTH_URL="http://127.0.0.1:${BIND_PORT}/health"
 if curl -fsS --max-time 5 "${HEALTH_URL}" | grep -q '"status"[[:space:]]*:[[:space:]]*"ok"'; then
   log "Health check passed: ${HEALTH_URL}"
 else
@@ -298,12 +317,15 @@ fi
 # Summary
 # ---------------------------------------------------------------------------
 API_KEY_VALUE="$(grep -E '^API_KEY=' "${APP_DIR}/.env" | head -n1 | cut -d= -f2- || true)"
+PUBLIC_HINT="http://<server-ip>:${BIND_PORT}/"
 
 echo ""
 echo "=============================================="
 echo " Deploy complete"
 echo "=============================================="
 echo " App path:     ${APP_DIR}"
+echo " Listening:    ${BIND}"
+echo " Public URL:   ${PUBLIC_HINT}"
 echo " Service:      systemctl status ${SERVICE_NAME}"
 echo " Logs:         journalctl -u ${SERVICE_NAME} -f"
 echo " App log:      ${APP_DIR}/logs/application.log"
@@ -314,8 +336,9 @@ if [[ "${SKIP_APACHE}" != "1" ]]; then
   echo "               (point DNS A record to this server, then consider certbot)"
 fi
 echo ""
-echo " Test upload:"
-echo "   curl -X POST http://${BIND}/upload/document \\"
+echo " Test:"
+echo "   curl http://127.0.0.1:${BIND_PORT}/health"
+echo "   curl -X POST http://127.0.0.1:${BIND_PORT}/upload/document \\"
 echo "     -H \"X-API-Key: \$(grep ^API_KEY= ${APP_DIR}/.env | cut -d= -f2-)\" \\"
 echo "     -F \"file=@./somefile.pdf\""
 echo ""
