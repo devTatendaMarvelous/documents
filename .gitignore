@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+
+# Environment and secrets
+.env
+*.pem
+*.key
+
+# Storage — keep directory structure, ignore uploaded content
+app/storage/documents/*
+!app/storage/documents/.gitkeep
+app/storage/images/*
+!app/storage/images/.gitkeep
+app/storage/optimized/*
+!app/storage/optimized/.gitkeep
+app/storage/thumbnails/*
+!app/storage/thumbnails/.gitkeep
+
+# Logs
+logs/*
+!logs/.gitkeep
+*.log
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Build
+dist/
+build/
+*.egg-info/
