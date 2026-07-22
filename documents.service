@@ -8,11 +8,12 @@ Type=simple
 User=www-data
 Group=www-data
 
-# Project installation path — adjust if deployed elsewhere
+# Must match the git checkout on the server
 WorkingDirectory=/var/www/html/documents
-EnvironmentFile=/var/www/html/documents/.env
 
-# Ensure the venv binaries are preferred
+# Leading "-" makes a missing .env non-fatal (API key is hardcoded in the app)
+EnvironmentFile=-/var/www/html/documents/.env
+
 Environment=PATH=/var/www/html/documents/venv/bin:/usr/local/bin:/usr/bin
 Environment=PYTHONUNBUFFERED=1
 
@@ -28,20 +29,17 @@ ExecStart=/var/www/html/documents/venv/bin/gunicorn \
     --capture-output \
     app.main:app
 
-# Reliability
 Restart=always
 RestartSec=5
 KillMode=mixed
 TimeoutStopSec=30
 
-# Security hardening
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
 ReadWritePaths=/var/www/html/documents/app/storage /var/www/html/documents/logs
 
-# Resource limits (tune for your host)
 LimitNOFILE=65535
 
 [Install]
