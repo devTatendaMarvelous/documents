@@ -58,26 +58,26 @@ if [[ ! -f ".env" ]]; then
   echo "==> Generating .env from .env.example"
   if [[ -f ".env.example" ]]; then
     cp .env.example .env
-    # Generate a random API key when openssl is available
-    if command -v openssl >/dev/null 2>&1; then
-      GENERATED_KEY="$(openssl rand -hex 32)"
-      if grep -q '^API_KEY=' .env; then
+    CURRENT_KEY="$(grep -E '^API_KEY=' .env | head -n1 | cut -d= -f2- || true)"
+    if [[ -z "${CURRENT_KEY}" || "${CURRENT_KEY}" == "change-me" ]]; then
+      if command -v openssl >/dev/null 2>&1; then
+        GENERATED_KEY="$(openssl rand -hex 32)"
         sed -i "s/^API_KEY=.*/API_KEY=${GENERATED_KEY}/" .env
+        echo "    Generated a random API_KEY — store it securely"
       else
-        echo "API_KEY=${GENERATED_KEY}" >> .env
+        echo "    WARNING: openssl not found; leave API_KEY=change-me and update manually"
       fi
-      echo "    Generated a random API_KEY — store it securely"
     else
-      echo "    WARNING: openssl not found; leave API_KEY=change-me and update manually"
+      echo "    Using API_KEY from .env.example"
     fi
   else
     cat > .env <<'EOF'
-API_KEY=change-me
+API_KEY=microfindev263
 PORT=8000
 MAX_UPLOAD_SIZE=50MB
 LOG_LEVEL=INFO
 EOF
-    echo "    Created a default .env — update API_KEY before production use"
+    echo "    Created a default .env"
   fi
 else
   echo "==> .env already exists — leaving it unchanged"

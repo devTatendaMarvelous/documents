@@ -14,10 +14,11 @@ Applications (Laravel, Flutter, React, Next.js, and others) communicate with thi
 
 | Capability | Details |
 |---|---|
-| Document upload | PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, TXT, CSV, ZIP |
-| Image upload | JPG, JPEG, PNG, WebP |
+| Upload | Single `POST /upload` for documents and images |
+| Download | Single `GET /files/{filename}` for every stored asset |
+| Documents | PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, TXT, CSV, ZIP |
+| Images | JPG, JPEG, PNG, WebP (+ auto optimized/thumbnail WebP) |
 | Image pipeline | Resize (max 1920px) → compress (q80) → WebP → 300px thumbnail |
-| Serving | `/files/`, `/optimized/`, `/thumbnails/` |
 | Security | `X-API-Key` on every endpoint except `GET /health` |
 | Logging | Structured logs to stdout + `logs/application.log` |
 
@@ -110,38 +111,58 @@ GET /health
 { "status": "ok" }
 ```
 
-### Upload document
+### Upload (documents and images)
 
 ```http
-POST /upload/document
+POST /upload
 Content-Type: multipart/form-data
+X-API-Key: <your-api-key>
 ```
 
 Field name: `file`
+
+Type is detected from the extension:
+
+- **Documents** → stored in `storage/documents/`
+- **Images** → original in `storage/images/`, plus optimized + thumbnail WebP variants
+
+Document response:
 
 ```json
 {
   "success": true,
+  "type": "document",
   "filename": "5fbfa1ab-fac8-44d2-b5ba-0d02b51eeb89.pdf",
   "original_name": "invoice.pdf",
   "size": 123456,
   "mime_type": "application/pdf",
-  "url": "/files/5fbfa1ab-fac8-44d2-b5ba-0d02b51eeb89.pdf"
+  "url": "/files/5fbfa1ab-fac8-44d2-b5ba-0d02b51eeb89.pdf",
+  "optimized": null,
+  "thumbnail": null,
+  "optimized_url": null,
+  "thumbnail_url": null
 }
 ```
 
-Stored in `app/storage/documents/` with a UUID filename; extension preserved.
+Image response:
 
-### Upload image
-
-```http
-POST /upload/image
-Content-Type: multipart/form-data
+```json
+{
+  "success": true,
+  "type": "image",
+  "filename": "a1b2c3d4-....jpg",
+  "original_name": "photo.jpg",
+  "size": 204800,
+  "mime_type": "image/jpeg",
+  "url": "/files/a1b2c3d4-....jpg",
+  "optimized": "a1b2c3d4-....webp",
+  "thumbnail": "a1b2c3d4-...._thumb.webp",
+  "optimized_url": "/files/a1b2c3d4-....webp",
+  "thumbnail_url": "/files/a1b2c3d4-...._thumb.webp"
+}
 ```
 
-Field name: `file`
-
-Pipeline:
+Image pipeline:
 
 1. Save **original** to `storage/images/` (never overwritten later)  
 2. Resize if width &gt; 1920px (aspect ratio preserved)  
@@ -149,51 +170,29 @@ Pipeline:
 4. Convert to WebP → `storage/optimized/`  
 5. Generate 300px WebP thumbnail → `storage/thumbnails/`  
 
-```json
-{
-  "success": true,
-  "original": "a1b2c3d4-....jpg",
-  "optimized": "a1b2c3d4-....webp",
-  "thumbnail": "a1b2c3d4-....webp",
-  "url": "/files/a1b2c3d4-....jpg",
-  "optimized_url": "/optimized/a1b2c3d4-....webp",
-  "thumbnail_url": "/thumbnails/a1b2c3d4-....webp"
-}
-```
-
-### Retrieve file
+### Download
 
 ```http
 GET /files/{filename}
+X-API-Key: <your-api-key>
 ```
 
-Serves from `documents/` or `images/` with the correct MIME type.
+Serves documents, original images, optimized WebP, and thumbnails from one URL.
 
-### Retrieve optimized image
-
-```http
-GET /optimized/{filename}
-```
-
-### Retrieve thumbnail
-
-```http
-GET /thumbnails/{filename}
-```
-
-### Delete file
+### Delete
 
 ```http
 DELETE /files/{filename}
+X-API-Key: <your-api-key>
 ```
 
-Deletes the original **and** matching optimized/thumbnail variants when they exist.
+Deletes the file and matching image variants when they exist.
 
 ```json
 {
   "success": true,
   "message": "Deleted 3 file(s)",
-  "deleted": ["a1b2....jpg", "a1b2....webp", "a1b2....webp"]
+  "deleted": ["a1b2....jpg", "a1b2....webp", "a1b2...._thumb.webp"]
 }
 ```
 
@@ -228,37 +227,26 @@ export BASE="http://127.0.0.1:8000"
 curl -s "$BASE/health"
 ```
 
-### Upload a document
+### Upload (any supported file)
 
 ```bash
-curl -s -X POST "$BASE/upload/document" \
+curl -s -X POST "$BASE/upload" \
   -H "X-API-Key: $API_KEY" \
   -F "file=@./invoice.pdf"
-```
 
-### Upload an image
-
-```bash
-curl -s -X POST "$BASE/upload/image" \
+curl -s -X POST "$BASE/upload" \
   -H "X-API-Key: $API_KEY" \
   -F "file=@./photo.jpg"
 ```
 
-### Download a file
+### Download
 
 ```bash
 curl -s -OJ "$BASE/files/<uuid>.pdf" \
   -H "X-API-Key: $API_KEY"
 ```
 
-### Download optimized / thumbnail
-
-```bash
-curl -s -OJ "$BASE/optimized/<uuid>.webp" -H "X-API-Key: $API_KEY"
-curl -s -OJ "$BASE/thumbnails/<uuid>.webp" -H "X-API-Key: $API_KEY"
-```
-
-### Delete a file
+### Delete
 
 ```bash
 curl -s -X DELETE "$BASE/files/<uuid>.pdf" \
@@ -557,7 +545,7 @@ Example (Laravel HTTP client):
 $response = Http::withHeaders([
     'X-API-Key' => config('services.files.key'),
 ])->attach('file', file_get_contents($path), basename($path))
-  ->post(config('services.files.url') . '/upload/document');
+  ->post(config('services.files.url') . '/upload');
 ```
 
 ---

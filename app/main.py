@@ -193,14 +193,11 @@ def _register_routers(application: FastAPI) -> None:
 
 def _mount_static(application: FastAPI) -> None:
     """
-    Expose storage via FastAPI StaticFiles at the public URL prefixes.
+    Expose all storage directories under ``/files/`` via StaticFiles.
 
-    - ``/files/``       → documents + images (multi-directory)
-    - ``/optimized/``   → optimized WebP images
-    - ``/thumbnails/``  → thumbnail WebP images
-
-    API routes registered earlier win for exact handler matches (logging,
-    deletes). StaticFiles serves as the filesystem-backed exposure layer.
+    The API route ``GET /files/{filename}`` is registered first and takes
+    precedence (logging + consistent MIME handling). The mount remains as a
+    filesystem-backed fallback for the same prefix.
     """
     settings = get_settings()
     settings.ensure_directories()
@@ -208,19 +205,14 @@ def _mount_static(application: FastAPI) -> None:
     application.mount(
         "/files",
         MultiDirectoryStaticFiles(
-            directories=[settings.documents_dir, settings.images_dir],
+            directories=[
+                settings.documents_dir,
+                settings.images_dir,
+                settings.optimized_dir,
+                settings.thumbnails_dir,
+            ],
         ),
         name="files",
-    )
-    application.mount(
-        "/optimized",
-        StaticFiles(directory=str(settings.optimized_dir)),
-        name="optimized",
-    )
-    application.mount(
-        "/thumbnails",
-        StaticFiles(directory=str(settings.thumbnails_dir)),
-        name="thumbnails",
     )
 
 

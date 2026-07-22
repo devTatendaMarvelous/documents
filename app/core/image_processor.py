@@ -118,7 +118,7 @@ def process_image(
     thumbnails_dir.mkdir(parents=True, exist_ok=True)
 
     optimized_filename = f"{base_stem}{OPTIMIZED_EXTENSION}"
-    thumbnail_filename = f"{base_stem}{THUMBNAIL_EXTENSION}"
+    thumbnail_filename = f"{base_stem}_thumb{THUMBNAIL_EXTENSION}"
     optimized_path = optimized_dir / optimized_filename
     thumbnail_path = thumbnails_dir / thumbnail_filename
 

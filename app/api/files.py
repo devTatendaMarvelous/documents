@@ -1,4 +1,4 @@
-"""File retrieval and deletion endpoints."""
+"""File download and deletion endpoints."""
 
 from __future__ import annotations
 
@@ -43,13 +43,22 @@ def _not_found(filename: str) -> HTTPException:
     )
 
 
+def _all_storage_dirs(settings: Settings) -> tuple[Path, ...]:
+    """Search order for the unified download endpoint."""
+    return (
+        settings.documents_dir,
+        settings.images_dir,
+        settings.optimized_dir,
+        settings.thumbnails_dir,
+    )
+
+
 @router.get(
     "/files/{filename}",
-    summary="Retrieve a document or original image",
+    summary="Download a file",
     description=(
-        "Serves a file from ``storage/documents/`` or ``storage/images/`` "
-        "with the correct MIME type. Documents and images share this path "
-        "because originals live in separate storage directories."
+        "Single download endpoint for every stored asset: documents, original "
+        "images, optimized WebP variants, and thumbnails."
     ),
     responses={404: {"description": "File not found"}},
 )
@@ -57,13 +66,9 @@ async def get_file(
     filename: str,
     settings: Settings = Depends(get_settings),
 ) -> FileResponse:
-    """Serve an original document or image by stored filename."""
+    """Serve any stored file by UUID filename."""
     safe_name = sanitize_filename(filename)
-    path = resolve_in_directories(
-        safe_name,
-        settings.documents_dir,
-        settings.images_dir,
-    )
+    path = resolve_in_directories(safe_name, *_all_storage_dirs(settings))
     if path is None:
         raise _not_found(safe_name)
 
@@ -83,108 +88,35 @@ async def get_file(
     )
 
 
-@router.get(
-    "/optimized/{filename}",
-    summary="Retrieve an optimized image",
-    description=(
-        "Serves a processed WebP image from ``storage/optimized/``. "
-        "Also available via the StaticFiles mount at ``/optimized/``."
-    ),
-    responses={404: {"description": "File not found"}},
-)
-async def get_optimized(
-    filename: str,
-    settings: Settings = Depends(get_settings),
-) -> FileResponse:
-    """Serve an optimized WebP image variant with download logging."""
-    safe_name = sanitize_filename(filename)
-    path = settings.optimized_dir / safe_name
-    if not path.is_file():
-        raise _not_found(safe_name)
-
-    log_extra(
-        logger,
-        logging.INFO,
-        "Optimized image downloaded",
-        filename=safe_name,
-    )
-    return FileResponse(
-        path=path,
-        media_type="image/webp",
-        filename=safe_name,
-    )
-
-
-@router.get(
-    "/thumbnails/{filename}",
-    summary="Retrieve a thumbnail image",
-    description=(
-        "Serves a thumbnail WebP image from ``storage/thumbnails/``. "
-        "Also available via the StaticFiles mount at ``/thumbnails/``."
-    ),
-    responses={404: {"description": "File not found"}},
-)
-async def get_thumbnail(
-    filename: str,
-    settings: Settings = Depends(get_settings),
-) -> FileResponse:
-    """Serve a thumbnail WebP image variant with download logging."""
-    safe_name = sanitize_filename(filename)
-    path = settings.thumbnails_dir / safe_name
-    if not path.is_file():
-        raise _not_found(safe_name)
-
-    log_extra(
-        logger,
-        logging.INFO,
-        "Thumbnail downloaded",
-        filename=safe_name,
-    )
-    return FileResponse(
-        path=path,
-        media_type="image/webp",
-        filename=safe_name,
-    )
-
-
 @router.delete(
     "/files/{filename}",
     response_model=DeleteResponse,
     summary="Delete a file and its variants",
     description=(
-        "Deletes the original file from documents or images storage, and "
-        "removes matching optimized and thumbnail variants when present."
+        "Deletes the requested file. When the target is an original image "
+        "(or any of its variants), matching optimized and thumbnail files "
+        "are removed as well."
     ),
 )
 async def delete_file(
     filename: str,
     settings: Settings = Depends(get_settings),
 ) -> DeleteResponse:
-    """Delete an original file plus any related optimized/thumbnail assets."""
+    """Delete a file plus related optimized/thumbnail assets when present."""
     safe_name = sanitize_filename(filename)
     deleted: list[str] = []
 
-    original = resolve_in_directories(
-        safe_name,
-        settings.documents_dir,
-        settings.images_dir,
-    )
-
-    optimized_name, thumbnail_name = related_variant_names(safe_name)
-    candidates: list[tuple[str, Path]] = [
-        (f"optimized/{optimized_name}", settings.optimized_dir / optimized_name),
-        (f"thumbnails/{thumbnail_name}", settings.thumbnails_dir / thumbnail_name),
-    ]
-
-    if original is not None:
+    # Delete the exact requested file from any storage directory
+    direct = resolve_in_directories(safe_name, *_all_storage_dirs(settings))
+    if direct is not None:
         try:
-            original.unlink()
-            deleted.append(str(original.name))
+            direct.unlink()
+            deleted.append(str(direct.name))
         except OSError as exc:
             log_extra(
                 logger,
                 logging.ERROR,
-                "Failed to delete original file",
+                "Failed to delete file",
                 filename=safe_name,
                 error=str(exc),
             )
@@ -197,7 +129,15 @@ async def delete_file(
                 },
             ) from exc
 
-    for name, path in candidates:
+    # Also clean related image variants (idempotent if already removed)
+    optimized_name, thumbnail_name = related_variant_names(safe_name)
+    for name, path in (
+        (optimized_name, settings.optimized_dir / optimized_name),
+        (thumbnail_name, settings.thumbnails_dir / thumbnail_name),
+        # Original may still exist under images/ if a variant was deleted first
+    ):
+        if name == safe_name:
+            continue
         if path.is_file():
             try:
                 path.unlink()
@@ -216,6 +156,32 @@ async def delete_file(
                         "success": False,
                         "error": "Internal Server Error",
                         "message": f"Failed to delete variant '{name}'",
+                    },
+                ) from exc
+
+    # If caller deleted a variant, also remove the original image when present
+    stem = Path(safe_name).stem
+    if stem.endswith("_thumb"):
+        stem = stem[: -len("_thumb")]
+    for image_path in settings.images_dir.glob(f"{stem}.*"):
+        if image_path.is_file() and image_path.name not in deleted:
+            try:
+                image_path.unlink()
+                deleted.append(image_path.name)
+            except OSError as exc:
+                log_extra(
+                    logger,
+                    logging.ERROR,
+                    "Failed to delete original image",
+                    filename=image_path.name,
+                    error=str(exc),
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={
+                        "success": False,
+                        "error": "Internal Server Error",
+                        "message": "Failed to delete original image",
                     },
                 ) from exc
 

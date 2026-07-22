@@ -1,19 +1,21 @@
-"""Upload endpoints for documents and images."""
+"""Unified upload endpoint for documents and images."""
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Literal
 
 import aiofiles
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.core.config import Settings, get_settings
 from app.core.constants import (
-    ALLOWED_DOCUMENT_EXTENSIONS,
     ALLOWED_IMAGE_EXTENSIONS,
+    ALLOWED_UPLOAD_EXTENSIONS,
     DOCUMENT_MIME_TYPES,
+    IMAGE_MIME_TYPES,
 )
 from app.core.image_processor import ImageProcessingError, process_image
 from app.core.logger import get_logger, log_extra
@@ -27,7 +29,6 @@ from app.utils.helpers import (
 )
 
 router = APIRouter(
-    prefix="/upload",
     tags=["Upload"],
     dependencies=[Depends(verify_api_key)],
 )
@@ -35,45 +36,24 @@ router = APIRouter(
 logger = get_logger("upload")
 
 
-class DocumentUploadResponse(BaseModel):
-    """Response returned after a successful document upload."""
+class UploadResponse(BaseModel):
+    """Unified response for any successful upload."""
 
     success: bool = True
+    type: Literal["document", "image"]
     filename: str
     original_name: str
     size: int
     mime_type: str
     url: str
+    optimized: str | None = None
+    thumbnail: str | None = None
+    optimized_url: str | None = None
+    thumbnail_url: str | None = None
 
 
-class ImageUploadResponse(BaseModel):
-    """Response returned after a successful image upload and processing."""
-
-    success: bool = True
-    original: str
-    optimized: str
-    thumbnail: str
-    url: str
-    optimized_url: str
-    thumbnail_url: str
-
-
-@router.post(
-    "/document",
-    response_model=DocumentUploadResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Upload a document",
-    description=(
-        "Accepts PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, TXT, CSV, or ZIP. "
-        "Stores the file under ``storage/documents/`` with a UUID filename."
-    ),
-)
-async def upload_document(
-    file: UploadFile = File(..., description="Document file to upload"),
-    settings: Settings = Depends(get_settings),
-) -> DocumentUploadResponse:
-    """Receive and store a document file on the local filesystem."""
-    if not file.filename:
+def _require_filename(upload: UploadFile) -> str:
+    if not upload.filename:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -82,23 +62,10 @@ async def upload_document(
                 "message": "Filename is required",
             },
         )
+    return upload.filename
 
-    validate_extension(file.filename, ALLOWED_DOCUMENT_EXTENSIONS)
-    content = await read_upload_limited(file, settings.max_upload_size_bytes)
 
-    if not content:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "success": False,
-                "error": "Bad Request",
-                "message": "Uploaded file is empty",
-            },
-        )
-
-    stored_name = generate_uuid_filename(file.filename)
-    destination: Path = settings.documents_dir / stored_name
-
+async def _write_bytes(destination: Path, content: bytes, *, label: str) -> None:
     try:
         async with aiofiles.open(destination, "wb") as out:
             await out.write(content)
@@ -106,8 +73,8 @@ async def upload_document(
         log_extra(
             logger,
             logging.ERROR,
-            "Document upload failed to write",
-            original=file.filename,
+            f"{label} upload failed to write",
+            path=str(destination),
             error=str(exc),
         )
         raise HTTPException(
@@ -115,60 +82,31 @@ async def upload_document(
             detail={
                 "success": False,
                 "error": "Internal Server Error",
-                "message": "Failed to store uploaded document",
+                "message": f"Failed to store uploaded {label}",
             },
         ) from exc
 
-    extension = get_extension(file.filename)
-    mime_type = DOCUMENT_MIME_TYPES.get(extension, get_mime_type(stored_name))
-
-    log_extra(
-        logger,
-        logging.INFO,
-        "Document uploaded",
-        original=file.filename,
-        stored=stored_name,
-        size=len(content),
-        mime_type=mime_type,
-    )
-
-    return DocumentUploadResponse(
-        success=True,
-        filename=stored_name,
-        original_name=file.filename,
-        size=len(content),
-        mime_type=mime_type,
-        url=f"/files/{stored_name}",
-    )
-
 
 @router.post(
-    "/image",
-    response_model=ImageUploadResponse,
+    "/upload",
+    response_model=UploadResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Upload and process an image",
+    summary="Upload a document or image",
     description=(
-        "Accepts JPG, JPEG, PNG, or WebP. Stores the original under "
-        "``storage/images/``, then generates optimized and thumbnail WebP "
-        "variants. The original file is never overwritten."
+        "Single upload endpoint for all supported types. "
+        "Documents (PDF, Office, TXT, CSV, ZIP) are stored as-is. "
+        "Images (JPG, JPEG, PNG, WebP) are stored as originals and also "
+        "processed into optimized + thumbnail WebP variants. "
+        "All downloads use ``GET /files/{filename}``."
     ),
 )
-async def upload_image(
-    file: UploadFile = File(..., description="Image file to upload"),
+async def upload_file(
+    file: UploadFile = File(..., description="Document or image to upload"),
     settings: Settings = Depends(get_settings),
-) -> ImageUploadResponse:
-    """Receive an image, store the original, and generate processed variants."""
-    if not file.filename:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "success": False,
-                "error": "Bad Request",
-                "message": "Filename is required",
-            },
-        )
-
-    validate_extension(file.filename, ALLOWED_IMAGE_EXTENSIONS)
+) -> UploadResponse:
+    """Accept any allowed file type and route it to the correct storage path."""
+    original_name = _require_filename(file)
+    extension = validate_extension(original_name, ALLOWED_UPLOAD_EXTENSIONS)
     content = await read_upload_limited(file, settings.max_upload_size_bytes)
 
     if not content:
@@ -181,40 +119,62 @@ async def upload_image(
             },
         )
 
-    stored_name = generate_uuid_filename(file.filename)
-    original_path: Path = settings.images_dir / stored_name
+    if extension in ALLOWED_IMAGE_EXTENSIONS:
+        return await _store_image(original_name, content, settings)
 
-    try:
-        async with aiofiles.open(original_path, "wb") as out:
-            await out.write(content)
-    except OSError as exc:
-        log_extra(
-            logger,
-            logging.ERROR,
-            "Image upload failed to write original",
-            original=file.filename,
-            error=str(exc),
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "success": False,
-                "error": "Internal Server Error",
-                "message": "Failed to store uploaded image",
-            },
-        ) from exc
+    return await _store_document(original_name, content, settings, extension)
 
-    base_stem = Path(stored_name).stem
+
+async def _store_document(
+    original_name: str,
+    content: bytes,
+    settings: Settings,
+    extension: str,
+) -> UploadResponse:
+    stored_name = generate_uuid_filename(original_name)
+    destination = settings.documents_dir / stored_name
+    await _write_bytes(destination, content, label="document")
+
+    mime_type = DOCUMENT_MIME_TYPES.get(extension, get_mime_type(stored_name))
+
+    log_extra(
+        logger,
+        logging.INFO,
+        "Document uploaded",
+        original=original_name,
+        stored=stored_name,
+        size=len(content),
+        mime_type=mime_type,
+    )
+
+    return UploadResponse(
+        success=True,
+        type="document",
+        filename=stored_name,
+        original_name=original_name,
+        size=len(content),
+        mime_type=mime_type,
+        url=f"/files/{stored_name}",
+    )
+
+
+async def _store_image(
+    original_name: str,
+    content: bytes,
+    settings: Settings,
+) -> UploadResponse:
+    stored_name = generate_uuid_filename(original_name)
+    original_path = settings.images_dir / stored_name
+    await _write_bytes(original_path, content, label="image")
 
     try:
         result = process_image(
             source_path=original_path,
             optimized_dir=settings.optimized_dir,
             thumbnails_dir=settings.thumbnails_dir,
-            base_stem=base_stem,
+            base_stem=Path(stored_name).stem,
         )
     except ImageProcessingError as exc:
-        # Remove the original if processing fails so we do not leave orphans
         try:
             if original_path.exists():
                 original_path.unlink()
@@ -225,7 +185,7 @@ async def upload_image(
             logger,
             logging.ERROR,
             "Image processing failure during upload",
-            original=file.filename,
+            original=original_name,
             error=str(exc),
         )
         raise HTTPException(
@@ -237,23 +197,32 @@ async def upload_image(
             },
         ) from exc
 
+    mime_type = IMAGE_MIME_TYPES.get(
+        get_extension(original_name),
+        get_mime_type(stored_name),
+    )
+
     log_extra(
         logger,
         logging.INFO,
         "Image uploaded and processed",
-        original=file.filename,
+        original=original_name,
         stored=stored_name,
         optimized=result.optimized_filename,
         thumbnail=result.thumbnail_filename,
         size=len(content),
     )
 
-    return ImageUploadResponse(
+    return UploadResponse(
         success=True,
-        original=stored_name,
+        type="image",
+        filename=stored_name,
+        original_name=original_name,
+        size=len(content),
+        mime_type=mime_type,
+        url=f"/files/{stored_name}",
         optimized=result.optimized_filename,
         thumbnail=result.thumbnail_filename,
-        url=f"/files/{stored_name}",
-        optimized_url=f"/optimized/{result.optimized_filename}",
-        thumbnail_url=f"/thumbnails/{result.thumbnail_filename}",
+        optimized_url=f"/files/{result.optimized_filename}",
+        thumbnail_url=f"/files/{result.thumbnail_filename}",
     )

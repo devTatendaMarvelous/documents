@@ -136,9 +136,14 @@ def stem_from_filename(filename: str) -> str:
 
 def related_variant_names(filename: str) -> tuple[str, str]:
     """
-    Derive optimized and thumbnail WebP filenames from an original image name.
+    Derive optimized and thumbnail WebP filenames from a stored filename.
 
-    Both variants share the UUID stem of the original.
+    Accepts an original (``uuid.jpg``), optimized (``uuid.webp``), or
+    thumbnail (``uuid_thumb.webp``) name and returns both variant names.
     """
-    stem = stem_from_filename(sanitize_filename(filename))
-    return f"{stem}.webp", f"{stem}.webp"
+    safe = sanitize_filename(filename)
+    stem = Path(safe).stem
+    # Normalize thumbnail stem: uuid_thumb → uuid
+    if stem.endswith("_thumb"):
+        stem = stem[: -len("_thumb")]
+    return f"{stem}.webp", f"{stem}_thumb.webp"

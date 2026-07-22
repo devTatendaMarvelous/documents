@@ -171,19 +171,25 @@ if [[ ! -f .env ]]; then
     cp .env.example .env
   else
     cat > .env <<'EOF'
-API_KEY=change-me
+API_KEY=microfindev263
 PORT=8000
 MAX_UPLOAD_SIZE=50MB
 LOG_LEVEL=INFO
 EOF
   fi
 
-  if command -v openssl >/dev/null 2>&1; then
-    GENERATED_KEY="$(openssl rand -hex 32)"
-    sed -i "s/^API_KEY=.*/API_KEY=${GENERATED_KEY}/" .env
-    log "Generated API_KEY (saved in ${APP_DIR}/.env)"
+  # Only generate a random key when the placeholder is still in place
+  CURRENT_KEY="$(grep -E '^API_KEY=' .env | head -n1 | cut -d= -f2- || true)"
+  if [[ -z "${CURRENT_KEY}" || "${CURRENT_KEY}" == "change-me" ]]; then
+    if command -v openssl >/dev/null 2>&1; then
+      GENERATED_KEY="$(openssl rand -hex 32)"
+      sed -i "s/^API_KEY=.*/API_KEY=${GENERATED_KEY}/" .env
+      log "Generated API_KEY (saved in ${APP_DIR}/.env)"
+    else
+      warn "openssl missing — set API_KEY in ${APP_DIR}/.env manually"
+    fi
   else
-    warn "openssl missing — set API_KEY in ${APP_DIR}/.env manually"
+    log "Using API_KEY from .env.example"
   fi
 else
   log ".env already exists — leaving unchanged"
@@ -338,7 +344,7 @@ fi
 echo ""
 echo " Test:"
 echo "   curl http://127.0.0.1:${BIND_PORT}/health"
-echo "   curl -X POST http://127.0.0.1:${BIND_PORT}/upload/document \\"
+echo "   curl -X POST http://127.0.0.1:${BIND_PORT}/upload \\"
 echo "     -H \"X-API-Key: \$(grep ^API_KEY= ${APP_DIR}/.env | cut -d= -f2-)\" \\"
 echo "     -F \"file=@./somefile.pdf\""
 echo ""

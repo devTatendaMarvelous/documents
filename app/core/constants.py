@@ -74,4 +74,8 @@ ALL_MIME_TYPES: dict[str, str] = {
     OPTIMIZED_EXTENSION: "image/webp",
 }
 
+ALLOWED_UPLOAD_EXTENSIONS: frozenset[str] = (
+    ALLOWED_DOCUMENT_EXTENSIONS | ALLOWED_IMAGE_EXTENSIONS
+)
+
 DEFAULT_MIME_TYPE: str = "application/octet-stream"
